@@ -14,8 +14,7 @@ kotlin {
 }
 
 dependencies {
-    implementation("com.amazonaws:aws-lambda-java-core:1.4.0")
-    implementation("com.amazonaws:aws-lambda-java-events:3.16.1")
+    implementation("org.http4k:http4k-serverless-lambda:6.53.0.0")
 
     val log4jVersion = "2.25.4"
     runtimeOnly("org.apache.logging.log4j:log4j-api:$log4jVersion")

@@ -1,7 +1,6 @@
 package com.xilef7.hourlystream
 
 import com.amazonaws.services.lambda.runtime.Context
-import com.amazonaws.services.lambda.runtime.RequestHandler
 import com.amazonaws.services.lambda.runtime.events.DynamodbTimeWindowEvent
 import com.amazonaws.services.lambda.runtime.events.TimeWindowEventResponse
 import com.amazonaws.services.lambda.runtime.events.models.dynamodb.Identity
@@ -16,19 +15,22 @@ import com.xilef7.db.DynamoDbService
 import com.xilef7.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
+import org.http4k.serverless.AwsLambdaEventFunction
+import org.http4k.serverless.FnHandler
+import org.http4k.serverless.FnLoader
+
+val dbService = DynamoDbService()
 
 @Suppress("unused")
-class Handler : RequestHandler<DynamodbTimeWindowEvent?, TimeWindowEventResponse?> {
-    val dbService = DynamoDbService()
-
-    override fun handleRequest(event: DynamodbTimeWindowEvent?, context: Context?): TimeWindowEventResponse? =
+class Handler : AwsLambdaEventFunction(FnLoader {
+    FnHandler { event: DynamodbTimeWindowEvent, context: Context ->
         runBlocking {
             mutableMapOf<Key, DeltaStatistics>().apply {
-                event!!.state?.forEach { (key, value) ->
+                event.state?.forEach { (key, value) ->
                     this[Json.decodeFromString(key!!)] = Json.decodeFromString(value!!)
                 }
             }.let { keyToStatistics ->
-                if (event!!.isFinalInvokeForWindow) {
+                if (event.isFinalInvokeForWindow) {
                     if (keyToStatistics.isNotEmpty()) dbService.updateDailyPrices(keyToStatistics)
                     TimeWindowEventResponse()
                 } else keyToStatistics.apply {
@@ -54,8 +56,9 @@ class Handler : RequestHandler<DynamodbTimeWindowEvent?, TimeWindowEventResponse
                                 Json.encodeToString(key) to Json.encodeToString(value)
                             }.toMap()
                         )
-                        .build()
+                        .build()!!
                 }
             }
         }
-}
+    }
+})

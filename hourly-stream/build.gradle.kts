@@ -9,4 +9,5 @@ dependencies {
     implementation(libs.kotlinxCoroutines)
     implementation(project(":dynamodb-service"))
     implementation(project(":shared"))
+    implementation("com.amazonaws:aws-lambda-java-events:3.16.1")
 }
