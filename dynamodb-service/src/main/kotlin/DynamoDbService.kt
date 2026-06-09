@@ -5,6 +5,7 @@ import aws.sdk.kotlin.services.dynamodb.batchGetItem
 import aws.sdk.kotlin.services.dynamodb.getItem
 import aws.sdk.kotlin.services.dynamodb.model.*
 import aws.sdk.kotlin.services.dynamodb.paginators.queryPaginated
+import aws.smithy.kotlin.runtime.http.engine.crt.CrtHttpEngine
 import com.xilef7.*
 import com.xilef7.DynamoDbConstants.Companion.BATCH_GET_ITEM_MAX_ITEMS
 import com.xilef7.DynamoDbConstants.Companion.BATCH_WRITE_ITEM_MAX_ITEMS
@@ -29,7 +30,9 @@ import kotlin.time.Instant
 
 class DynamoDbService : AutoCloseable {
     val client = runBlocking {
-        DynamoDbClient.fromEnvironment()
+        DynamoDbClient.fromEnvironment {
+            httpClient(CrtHttpEngine)
+        }
     }
 
     suspend fun updateHourlyPrices(keyToStatistics: Map<Key, UserProvidedStatistics>) =
