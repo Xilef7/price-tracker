@@ -17,6 +17,7 @@ import kotlinx.coroutines.flow.collect
 import kotlinx.coroutines.flow.flow
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
+import org.http4k.client.URLConnectionHttpClient
 import org.http4k.connect.amazon.dynamodb.*
 import org.http4k.connect.amazon.dynamodb.action.BatchGetItems
 import org.http4k.connect.amazon.dynamodb.action.BatchWriteItems
@@ -30,7 +31,7 @@ import kotlin.time.Duration
 import kotlin.time.Instant
 
 class DynamoDbService {
-    val client = DynamoDb.Http()
+    val client = DynamoDb.Http(http = URLConnectionHttpClient())
 
     suspend fun updateHourlyPrices(keyToStatistics: Map<Key, UserProvidedStatistics>) =
         addUserProvidedStatistics(tableHourly, keyToStatistics, HOURLY_TABLE_EXPIRY_DURATION)
