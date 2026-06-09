@@ -1,42 +1,42 @@
 package com.xilef7.db
 
-import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
-import aws.sdk.kotlin.services.dynamodb.batchGetItem
-import aws.sdk.kotlin.services.dynamodb.getItem
-import aws.sdk.kotlin.services.dynamodb.model.*
-import aws.sdk.kotlin.services.dynamodb.paginators.queryPaginated
 import com.xilef7.*
 import com.xilef7.DynamoDbConstants.Companion.BATCH_GET_ITEM_MAX_ITEMS
 import com.xilef7.DynamoDbConstants.Companion.BATCH_WRITE_ITEM_MAX_ITEMS
+import com.xilef7.DynamoDbConstants.Companion.CONDITIONAL_CHECK_FAILED_EXCEPTION
+import com.xilef7.DynamoDbConstants.Companion.PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION
 import com.xilef7.DynamoDbConstants.Companion.READ_UNIT_SIZE_IN_BYTES
-import com.xilef7.PriceTrackerResources.Companion.COUNT
-import com.xilef7.PriceTrackerResources.Companion.DAILY_TABLE
 import com.xilef7.PriceTrackerResources.Companion.DAILY_TABLE_ITEM_SIZE_IN_BYTES
-import com.xilef7.PriceTrackerResources.Companion.HOURLY_TABLE
 import com.xilef7.PriceTrackerResources.Companion.HOURLY_TABLE_EXPIRY_DURATION
 import com.xilef7.PriceTrackerResources.Companion.HOURLY_TABLE_ITEM_SIZE_IN_BYTES
-import com.xilef7.PriceTrackerResources.Companion.INSTANT
-import com.xilef7.PriceTrackerResources.Companion.MAX
-import com.xilef7.PriceTrackerResources.Companion.MEAN
-import com.xilef7.PriceTrackerResources.Companion.MIN
-import com.xilef7.PriceTrackerResources.Companion.SKU_ID
-import com.xilef7.PriceTrackerResources.Companion.VERSION
-import kotlinx.coroutines.*
-import kotlinx.coroutines.flow.*
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.ExperimentalCoroutinesApi
+import kotlinx.coroutines.flow.channelFlow
+import kotlinx.coroutines.flow.chunked
+import kotlinx.coroutines.flow.collect
+import kotlinx.coroutines.flow.flow
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import org.http4k.connect.amazon.dynamodb.*
+import org.http4k.connect.amazon.dynamodb.action.BatchGetItems
+import org.http4k.connect.amazon.dynamodb.action.BatchWriteItems
+import org.http4k.connect.amazon.dynamodb.model.ReqGetItem
+import org.http4k.connect.amazon.dynamodb.model.ReqWriteItem
+import org.http4k.connect.amazon.dynamodb.model.TableName
+import org.http4k.connect.model.Timestamp
+import org.http4k.connect.orThrow
 import java.math.BigInteger
 import kotlin.time.Duration
 import kotlin.time.Instant
 
-class DynamoDbService : AutoCloseable {
-    val client = runBlocking {
-        DynamoDbClient.fromEnvironment()
-    }
+class DynamoDbService {
+    val client = DynamoDb.Http()
 
     suspend fun updateHourlyPrices(keyToStatistics: Map<Key, UserProvidedStatistics>) =
-        addUserProvidedStatistics(HOURLY_TABLE, keyToStatistics, HOURLY_TABLE_EXPIRY_DURATION)
+        addUserProvidedStatistics(tableHourly, keyToStatistics, HOURLY_TABLE_EXPIRY_DURATION)
 
     private suspend fun addUserProvidedStatistics(
-        tableName: String,
+        tableName: TableName,
         keyToStatistics: Map<Key, UserProvidedStatistics>,
         expiry: Duration? = null,
     ) = withContext(Dispatchers.Default) {
@@ -46,55 +46,56 @@ class DynamoDbService : AutoCloseable {
         ) = keyToStatistics.getValue(key).let { userProvidedStatistics ->
             retry(
                 storedStatistics,
-                { _: ConditionalCheckFailedException ->
-                    client.getItem {
-                        val meanNameAlias = "#mean"
-                        val countNameAlias = "#count"
-                        val maxNameAlias = "#max"
-                        val minNameAlias = "#min"
-                        val versionNameAlias = "#version"
+                CONDITIONAL_CHECK_FAILED_EXCEPTION to {
+                    val meanNameAlias = "#mean"
+                    val countNameAlias = "#count"
+                    val maxNameAlias = "#max"
+                    val minNameAlias = "#min"
+                    val versionNameAlias = "#version"
 
-                        this.tableName = tableName
-                        this.key = key.toAttributeMap()
-                        projectionExpression = listOf(
-                            meanNameAlias,
-                            countNameAlias,
-                            maxNameAlias,
-                            minNameAlias,
-                            versionNameAlias,
-                        ).joinToString(",")
-                        consistentRead = true
-                        expressionAttributeNames = mapOf(
-                            meanNameAlias to MEAN,
-                            countNameAlias to COUNT,
-                            maxNameAlias to MAX,
-                            minNameAlias to MIN,
-                            versionNameAlias to VERSION,
+                    retry(PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION) {
+                        client.getItem(
+                            tableName,
+                            key.toAttributeMap(),
+                            ProjectionExpression = listOf(
+                                meanNameAlias,
+                                countNameAlias,
+                                maxNameAlias,
+                                minNameAlias,
+                                versionNameAlias,
+                            ).joinToString(","),
+                            ExpressionAttributeNames = mapOf(
+                                meanNameAlias to attrMean.name,
+                                countNameAlias to attrCount.name,
+                                maxNameAlias to attrMax.name,
+                                minNameAlias to attrMin.name,
+                                versionNameAlias to attrVersion.name,
+                            ),
+                            ConsistentRead = true,
                         )
                     }.item?.storedStatistics
                 }
             ) {
                 (it + userProvidedStatistics).let { combinedStatistics ->
-                    client.putItem(PutItemRequest {
-                        val skuIdNameAlias = "#skuId"
-                        val versionNameAlias = "#version"
-                        val versionValueAlias = ":version"
+                    val skuIdNameAlias = "#skuId"
+                    val versionNameAlias = "#version"
+                    val versionValueAlias = ":version"
 
-                        this.tableName = tableName
-                        item = (key to combinedStatistics).toAttributeMap(
+                    client.putItem(
+                        tableName,
+                        (key to combinedStatistics).toAttributeMap(
                             newVersion = combinedStatistics.version + BigInteger.ONE,
                             expiry = expiry,
-                        )
-                        conditionExpression =
-                            "attribute_not_exists($skuIdNameAlias) OR $versionNameAlias = $versionValueAlias"
-                        expressionAttributeNames = mapOf(
-                            skuIdNameAlias to SKU_ID,
-                            versionNameAlias to VERSION,
-                        )
-                        expressionAttributeValues = mapOf(
-                            versionValueAlias to AttributeValue.N(combinedStatistics.version.toString()),
-                        )
-                    })
+                        ),
+                        ConditionExpression =
+                            "attribute_not_exists($skuIdNameAlias) OR $versionNameAlias = $versionValueAlias",
+                        ExpressionAttributeNames = mapOf(
+                            skuIdNameAlias to attrSkuId.name,
+                            versionNameAlias to attrVersion.name,
+                        ),
+                        ExpressionAttributeValues =
+                            mapOf(versionValueAlias to attrVersion.asValue(combinedStatistics.version)),
+                    )
                 }
             }
         }
@@ -104,13 +105,19 @@ class DynamoDbService : AutoCloseable {
                 val nonExistentItemKeys = keys.toMutableSet()
 
                 retry(
-                    mapOf(tableName to KeysAndAttributes {
-                        this.keys = keys.map(Key::toAttributeMap)
-                        consistentRead = true
-                    }),
-                    BatchGetItemResponse::unprocessedKeys,
-                ) { client.batchGetItem { requestItems = it } }.collect { response ->
-                    response.responses!!.getValue(tableName).forEach {
+                    mapOf(
+                        tableName to ReqGetItem.Get(
+                            Keys = keys.map(Key::toAttributeMap),
+                            ConsistentRead = true
+                        )
+                    ),
+                    BatchGetItems::getUnprocessedKeys,
+                ) {
+                    retry(PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION) {
+                        client.batchGetItem(it)
+                    }
+                }.collect { response ->
+                    response.Responses!!.getValue(tableName.value).forEach {
                         val key = it.key
                         nonExistentItemKeys.remove(key)
 
@@ -124,11 +131,11 @@ class DynamoDbService : AutoCloseable {
     }
 
     suspend fun updateDailyPrices(keyToStatistics: Map<Key, DeltaStatistics>) =
-        addDeltaStatistics(DAILY_TABLE, keyToStatistics)
+        addDeltaStatistics(tableDaily, keyToStatistics)
 
     @OptIn(ExperimentalCoroutinesApi::class)
     private suspend fun addDeltaStatistics(
-        tableName: String,
+        tableName: TableName,
         keyToStatistics: Map<Key, DeltaStatistics>,
         expiry: Duration? = null,
     ) = withContext(Dispatchers.Default) {
@@ -139,14 +146,20 @@ class DynamoDbService : AutoCloseable {
                 keyToStatistics.keys.chunked(BATCH_GET_ITEM_MAX_ITEMS).forEach { keys ->
                     launch {
                         retry(
-                            mapOf(tableName to KeysAndAttributes {
-                                this.keys = keys.map(Key::toAttributeMap)
-                                consistentRead = true
-                            }),
-                            BatchGetItemResponse::unprocessedKeys,
+                            mapOf(
+                                tableName to ReqGetItem.Get(
+                                    Keys = keys.map(Key::toAttributeMap),
+                                    ConsistentRead = true,
+                                )
+                            ),
+                            BatchGetItems::getUnprocessedKeys,
                             delayProvider = ExponentialBackoffWithJitter(jitter = 0.0),
-                        ) { client.batchGetItem { requestItems = it } }.collect { response ->
-                            response.responses!!.getValue(tableName).forEach { send(it) }
+                        ) {
+                            retry(PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION) {
+                                client.batchGetItem(it)
+                            }
+                        }.collect { response ->
+                            response.Responses!!.getValue(tableName.value).forEach { send(it) }
                         }
                     }
                 }
@@ -167,22 +180,26 @@ class DynamoDbService : AutoCloseable {
             launch {
                 retry(
                     mapOf(tableName to pairs.map {
-                        WriteRequest { putRequest = PutRequest { item = it.toAttributeMap(expiry = expiry) } }
+                        ReqWriteItem.Put(it.toAttributeMap(expiry = expiry))
                     }),
-                    BatchWriteItemResponse::unprocessedItems,
+                    BatchWriteItems::getUnprocessedItems,
                     delayProvider = ExponentialBackoffWithJitter(jitter = 0.0),
-                ) { client.batchWriteItem(BatchWriteItemRequest { requestItems = it }) }.collect()
+                ) {
+                    retry(PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION) {
+                        client.batchWriteItem(it)
+                    }
+                }.collect()
             }
         }
     }
 
-    suspend fun getPastHourlyPrices(
+    fun getPastHourlyPrices(
         skuId: String,
         latestInstant: Instant,
         duration: Duration,
         lastEvaluatedKey: Key? = null,
     ) = getPrices(
-        HOURLY_TABLE,
+        tableHourly,
         READ_UNIT_SIZE_IN_BYTES / HOURLY_TABLE_ITEM_SIZE_IN_BYTES,
         skuId,
         latestInstant,
@@ -190,13 +207,13 @@ class DynamoDbService : AutoCloseable {
         lastEvaluatedKey,
     )
 
-    suspend fun getPastDailyPrices(
+    fun getPastDailyPrices(
         skuId: String,
         latestInstant: Instant,
         duration: Duration,
         lastEvaluatedKey: Key? = null,
     ) = getPrices(
-        DAILY_TABLE,
+        tableDaily,
         READ_UNIT_SIZE_IN_BYTES / DAILY_TABLE_ITEM_SIZE_IN_BYTES,
         skuId,
         latestInstant,
@@ -204,14 +221,14 @@ class DynamoDbService : AutoCloseable {
         lastEvaluatedKey,
     )
 
-    private suspend fun getPrices(
-        tableName: String,
+    private fun getPrices(
+        tableName: TableName,
         limit: Int,
         skuId: String,
         latestInstant: Instant,
         duration: Duration,
         lastEvaluatedKey: Key? = null,
-    ) = client.queryPaginated {
+    ): List<ItemPriceAggregation> {
         val skuIdNameAlias = "#skuId"
         val skuIdValueAlias = ":skuId"
         val instantNameAlias = "#instant"
@@ -221,45 +238,45 @@ class DynamoDbService : AutoCloseable {
         val maxNameAlias = "#max"
         val minNameAlias = "#min"
 
-        this.tableName = tableName
-        keyConditionExpression =
-            "$skuIdNameAlias = $skuIdValueAlias and $instantNameAlias BETWEEN $earliestInstantValueAlias AND $latestInstantValueAlias"
-        exclusiveStartKey = lastEvaluatedKey?.toAttributeMap()
-        projectionExpression = listOf(
-            instantNameAlias,
-            meanNameAlias,
-            maxNameAlias,
-            minNameAlias,
-        ).joinToString(",")
-        scanIndexForward = false
-        this.limit = limit
-        expressionAttributeNames = mapOf(
-            skuIdNameAlias to SKU_ID,
-            instantNameAlias to INSTANT,
-            meanNameAlias to MEAN,
-            maxNameAlias to MAX,
-            minNameAlias to MIN,
-        )
-        expressionAttributeValues = mapOf(
-            skuIdValueAlias to AttributeValue.N(skuId),
-            earliestInstantValueAlias to AttributeValue.N(latestInstant.minus(duration).epochSeconds.toString()),
-            latestInstantValueAlias to AttributeValue.N(latestInstant.epochSeconds.toString()),
-        )
-    }.transform { response ->
-        response.items!!.forEach {
-            emit(
+        return client.queryPaginated(
+            tableName,
+            KeyConditionExpression =
+                "$skuIdNameAlias = $skuIdValueAlias and $instantNameAlias BETWEEN $earliestInstantValueAlias AND $latestInstantValueAlias",
+            ProjectionExpression = listOf(
+                instantNameAlias,
+                meanNameAlias,
+                maxNameAlias,
+                minNameAlias,
+            ).joinToString(","),
+            ExpressionAttributeNames = mapOf(
+                skuIdNameAlias to attrSkuId.name,
+                instantNameAlias to attrInstant.name,
+                meanNameAlias to attrMean.name,
+                maxNameAlias to attrMax.name,
+                minNameAlias to attrMin.name,
+            ),
+            ExpressionAttributeValues = mapOf(
+                skuIdValueAlias to attrSkuId.asValue(skuId.toLong()),
+                earliestInstantValueAlias to attrInstant.asValue(
+                    latestInstant.minus(duration).epochSeconds.let(
+                        Timestamp::of
+                    )
+                ),
+                latestInstantValueAlias to attrInstant.asValue(latestInstant.epochSeconds.let(Timestamp::of))
+            ),
+            ExclusiveStartKey = lastEvaluatedKey?.toAttributeMap(),
+            Limit = limit,
+            ScanIndexForward = false,
+        ).flatMap { result ->
+            result.orThrow().map {
                 ItemPriceAggregation(
                     skuId,
-                    it.getValue(INSTANT).asN().toLong().let(Instant::fromEpochSeconds),
-                    it.getValue(MEAN).asN().toFloat(),
-                    it.getValue(MAX).asN().toInt(),
-                    it.getValue(MIN).asN().toInt(),
+                    attrInstant(it).value.let(Instant::fromEpochSeconds),
+                    attrMean(it),
+                    attrMax(it),
+                    attrMin(it),
                 )
-            )
-        }
-    }.toList()
-
-    override fun close() {
-        client.close()
+            }
+        }.toList()
     }
 }

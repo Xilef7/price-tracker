@@ -1,6 +1,9 @@
 package com.xilef7.db
 
+import dev.forkhandles.result4k.Result
 import kotlinx.coroutines.flow.flow
+import org.http4k.connect.RemoteFailure
+import org.http4k.connect.orThrow
 
 internal inline fun <P : Map<*, *>, R> retry(
     initialParameter: P,
@@ -16,21 +19,32 @@ internal inline fun <P : Map<*, *>, R> retry(
     }
 }
 
-internal suspend inline fun <P, R, reified E : Throwable> retry(
+internal suspend inline fun <P, R> retry(
     initialParameter: P,
-    getUpdatedParameter: suspend (E) -> P,
+    errorTypeAndGetUpdatedParameter: Pair<String, suspend (String) -> P>,
     delayProvider: ExponentialBackoffWithJitter = ExponentialBackoffWithJitter(),
     maxAttempts: Int = 4,
-    crossinline fn: suspend (P) -> R,
+    crossinline fn: suspend (P) -> Result<R, RemoteFailure>,
 ): R = retry(initialParameter, delayProvider, maxAttempts) {
-    try {
-        return fn(it)
-    } catch (e: E) {
-        getUpdatedParameter(e)
-    }
+    return fn(it).peekJsonError { error ->
+        errorTypeAndGetUpdatedParameter.let { (errorType, getUpdatedParameter) ->
+            if (error.__type.contains(errorType)) return@retry getUpdatedParameter(error.Message)
+        }
+    }.orThrow()
 }
 
-internal suspend inline fun <P> retry(
+internal suspend inline fun <R> retry(
+    errorType: String,
+    delayProvider: ExponentialBackoffWithJitter = ExponentialBackoffWithJitter(),
+    maxAttempts: Int = 4,
+    crossinline fn: suspend () -> Result<R, RemoteFailure>,
+): R = retry(delayProvider, maxAttempts) {
+    return fn().peekJsonError {
+        if (it.__type.contains(errorType)) return@retry
+    }.orThrow()
+}
+
+private suspend inline fun <P> retry(
     initialParameter: P,
     delayProvider: ExponentialBackoffWithJitter = ExponentialBackoffWithJitter(),
     maxAttempts: Int = 4,

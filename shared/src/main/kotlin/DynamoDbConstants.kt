@@ -13,5 +13,8 @@ class DynamoDbConstants {
 
         const val IDENTITY_TYPE_SERVICE = "Service"
         const val IDENTITY_PRINCIPAL_ID_DYNAMODB = "dynamodb.amazonaws.com"
+
+        const val PROVISIONED_THROUGHPUT_EXCEEDED_EXCEPTION = "ProvisionedThroughputExceededException"
+        const val CONDITIONAL_CHECK_FAILED_EXCEPTION = "ConditionalCheckFailedException"
     }
 }
