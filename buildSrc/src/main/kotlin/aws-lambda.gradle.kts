@@ -30,6 +30,12 @@ tasks.shadowJar {
         duplicatesStrategy = DuplicatesStrategy.INCLUDE
     }
     transform<Log4j2PluginsCacheFileTransformer>()
+    minimize {
+        exclude(dependency("joda-time:joda-time:.*"))
+        exclude(dependency("org.apache.logging.log4j:log4j-layout-template-json:.*"))
+        exclude(dependency("org.apache.logging.log4j:log4j-slf4j2-impl:.*"))
+        exclude(dependency("com.amazonaws:aws-lambda-java-log4j2:.*"))
+    }
 }
 
 tasks.register<Zip>("buildZip") {
