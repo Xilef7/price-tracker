@@ -14,7 +14,10 @@ kotlin {
 }
 
 dependencies {
-    implementation("org.http4k:http4k-serverless-lambda:6.53.0.0")
+    val http4kVersion = "6.53.0.0"
+
+    implementation("org.http4k:http4k-serverless-lambda:$http4kVersion")
+    implementation("org.http4k:http4k-serverless-lambda-runtime:$http4kVersion")
 
     val log4jVersion = "2.25.4"
     runtimeOnly("org.apache.logging.log4j:log4j-api:$log4jVersion")

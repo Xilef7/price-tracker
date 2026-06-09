@@ -15,50 +15,52 @@ import com.xilef7.db.DynamoDbService
 import com.xilef7.plus
 import kotlinx.coroutines.runBlocking
 import kotlinx.serialization.json.Json
-import org.http4k.serverless.AwsLambdaEventFunction
+import org.http4k.serverless.AwsLambdaRuntime
 import org.http4k.serverless.FnHandler
 import org.http4k.serverless.FnLoader
+import org.http4k.serverless.asServer
 
 val dbService = DynamoDbService()
 
-@Suppress("unused")
-class Handler : AwsLambdaEventFunction(FnLoader {
-    FnHandler { event: DynamodbTimeWindowEvent, context: Context ->
-        runBlocking {
-            mutableMapOf<Key, DeltaStatistics>().apply {
-                event.state?.forEach { (key, value) ->
-                    this[Json.decodeFromString(key!!)] = Json.decodeFromString(value!!)
-                }
-            }.let { keyToStatistics ->
-                if (event.isFinalInvokeForWindow) {
-                    if (keyToStatistics.isNotEmpty()) dbService.updateDailyPrices(keyToStatistics)
-                    TimeWindowEventResponse()
-                } else keyToStatistics.apply {
-                    event.records
-                        .asSequence()
-                        .filter {
-                            when (it.eventName) {
-                                EVENT_NAME_INSERT -> true
-                                EVENT_NAME_MODIFY -> true
-                                EVENT_NAME_REMOVE -> it.userIdentity != Identity()
-                                    .withType(IDENTITY_TYPE_SERVICE)
-                                    .withPrincipalId(IDENTITY_PRINCIPAL_ID_DYNAMODB)
+fun main() {
+    FnLoader {
+        FnHandler { event: DynamodbTimeWindowEvent, _: Context ->
+            runBlocking {
+                mutableMapOf<Key, DeltaStatistics>().apply {
+                    event.state?.forEach { (key, value) ->
+                        this[Json.decodeFromString(key!!)] = Json.decodeFromString(value!!)
+                    }
+                }.let { keyToStatistics ->
+                    if (event.isFinalInvokeForWindow) {
+                        if (keyToStatistics.isNotEmpty()) dbService.updateDailyPrices(keyToStatistics)
+                        TimeWindowEventResponse()
+                    } else keyToStatistics.apply {
+                        event.records
+                            .asSequence()
+                            .filter {
+                                when (it.eventName) {
+                                    EVENT_NAME_INSERT -> true
+                                    EVENT_NAME_MODIFY -> true
+                                    EVENT_NAME_REMOVE -> it.userIdentity != Identity()
+                                        .withType(IDENTITY_TYPE_SERVICE)
+                                        .withPrincipalId(IDENTITY_PRINCIPAL_ID_DYNAMODB)
 
-                                else -> throw IllegalStateException("Invalid event name: ${it.eventName}")
+                                    else -> throw IllegalStateException("Invalid event name: ${it.eventName}")
+                                }
                             }
-                        }
-                        .forEach { this[it.key] += it.deltaStatistics }
-                }.let {
-                    TimeWindowEventResponse
-                        .builder()
-                        .withState(
-                            it.map { (key, value) ->
-                                Json.encodeToString(key) to Json.encodeToString(value)
-                            }.toMap()
-                        )
-                        .build()!!
+                            .forEach { this[it.key] += it.deltaStatistics }
+                    }.let {
+                        TimeWindowEventResponse
+                            .builder()
+                            .withState(
+                                it.map { (key, value) ->
+                                    Json.encodeToString(key) to Json.encodeToString(value)
+                                }.toMap()
+                            )
+                            .build()!!
+                    }
                 }
             }
         }
-    }
-})
+    }.asServer(AwsLambdaRuntime()).start()
+}

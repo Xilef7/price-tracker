@@ -10,3 +10,7 @@ dependencies {
     implementation(project(":dynamodb-service"))
     implementation(project(":shared"))
 }
+
+tasks.shadowJar {
+    manifest.attributes["Main-Class"] = "com.xilef7.hourlygetter.HandlerKt"
+}

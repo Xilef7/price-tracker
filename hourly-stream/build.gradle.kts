@@ -11,3 +11,7 @@ dependencies {
     implementation(project(":shared"))
     implementation("com.amazonaws:aws-lambda-java-events:3.16.1")
 }
+
+tasks.shadowJar {
+    manifest.attributes["Main-Class"] = "com.xilef7.hourlystream.HandlerKt"
+}

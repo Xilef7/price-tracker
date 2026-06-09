@@ -7,8 +7,8 @@ resource "aws_lambda_function" "hourly_poster" {
 
   filename = data.local_file.handler_zip.filename
 
-  runtime = "java25"
-  handler = "com.xilef7.hourlyposter.Handler"
+  runtime = "provided.al2023"
+  handler = "handler"
 
   source_code_hash = data.local_file.handler_zip.content_base64sha256
 
