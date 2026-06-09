@@ -1,0 +1,24 @@
+{
+  "manifest_version": 3,
+  "name": "Tokopedia Price History",
+  "version": "1.0",
+  "description": "Show historical price chart on Tokopedia",
+  "permissions": ["activeTab", "scripting", "storage"],
+  "host_permissions": [
+    "https://*.tokopedia.com/*",
+    "https://ow3icnkyfa.execute-api.ap-southeast-1.amazonaws.com/*"
+  ],
+  "action": {
+    "default_popup": "popup.html"
+  },
+  "content_scripts": [
+    {
+      "matches": ["https://www.tokopedia.com/*"],
+      "js": ["content-script.js"]
+    }
+  ],
+  "background": {
+    "service_worker": "service-worker.js",
+    "type": "module"
+  }
+}

@@ -30,5 +30,6 @@ include(":hourly-stream")
 include(":daily-getter")
 include(":dynamodb-service")
 include(":shared")
+include(":chrome-extension")
 
 rootProject.name = "price-tracker"
