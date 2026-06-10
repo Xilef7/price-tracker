@@ -1,5 +1,7 @@
 package com.xilef7.db
 
+import aws.sdk.kotlin.runtime.auth.credentials.EnvironmentCredentialsProvider
+import aws.sdk.kotlin.runtime.region.EnvironmentRegionProvider
 import aws.sdk.kotlin.services.dynamodb.DynamoDbClient
 import aws.sdk.kotlin.services.dynamodb.batchGetItem
 import aws.sdk.kotlin.services.dynamodb.getItem
@@ -29,7 +31,10 @@ import kotlin.time.Instant
 
 class DynamoDbService : AutoCloseable {
     val client = runBlocking {
-        DynamoDbClient.fromEnvironment()
+        DynamoDbClient.fromEnvironment {
+            regionProvider = EnvironmentRegionProvider()
+            credentialsProvider = EnvironmentCredentialsProvider()
+        }
     }
 
     suspend fun updateHourlyPrices(keyToStatistics: Map<Key, UserProvidedStatistics>) =
